@@ -10,4 +10,4 @@ Dermis file was a workflow of single cell RNA analysis for all epidermal samples
 before this workflow, you may need to obtain three files after mapping rawdata to GRCh38 by cellranger, and removed doublets by Scrublet, install R and Rstudio for this analysis. Besides, several packages would be installed, such as seurat, ggplot2, matrix,dplyr, monocle, harmony, clusterprofiler, org.HS.eg.db.
 
 ## contributions ##
-zhengmeiling and huzhi contributed to this workflow, if you have any questions, please contact with email in zhengmeiling314@csu.edu.cn or 208211087@csu.edu.com.
+zhengmeiling and huzhi contributed to this workflow, if you have any questions, please contact with email in zhengmeiling314@csu.edu.cn and huzhi97@csu.edu.cn.
