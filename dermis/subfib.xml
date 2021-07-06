@@ -1,0 +1,146 @@
+#####fibroblast subclustering####
+setwd('./R_analasis/dermis20200826/dermis20201229/fib.dermis/')
+dir.create('./fib.dermis')
+setwd('./fib.dermis/')
+library(Seurat)
+library(ggplot2)
+library(cowplot)
+library(Matrix)
+library(dplyr)
+library(ggsci)
+library(scater)
+library(SingleR)
+library(monocle)
+sam.name <- "multi"
+if(!dir.exists(sam.name)){
+              dir.create(sam.name)
+}
+load('../fib.dermis.20210104.Rdata')
+fib.lupus=fib_merged
+load('../fibroblast.hc.Rdata')
+fib.hc=Fibroblast_merged
+rm(Fibroblast_merged)
+rm(fib_merged,Fibroblast_merged)
+merged=merge(fib.hc,fib.lupus)
+rm(fib.hc,fib.lupus)
+merged <- NormalizeData(merged, normalization.method = "LogNormalize",scale.factor = 10000)
+merged <- FindVariableFeatures(merged, selection.method = "vst", nfeatures = 2000)
+all.genes <- rownames(merged)
+merged <- ScaleData(merged, features = row.names(merged))#需要足够大的内存
+merged <- ScaleData(merged, vars.to.regress = "percent.mt")
+merged <- RunPCA(merged, features = VariableFeatures(object = merged))
+merged$orig.ident=ifelse(merged$orig.ident=='HC_1','HC1',ifelse(merged$orig.ident=='HC_2','HC2',ifelse(merged$orig.ident=='HC_3','HC3',merged$orig.ident)))
+pdf(paste0("./",sam.name,"/PCA-ElbowPlot.pdf"),width = 6,height = 5)
+ElbowPlot(merged,ndims = 60)
+dev.off()
+library(harmony)
+merged=RunHarmony(merged,group.by.vars ='orig.ident')
+merged<- FindNeighbors(merged, dims = dim.use,reduction = 'harmony')
+merged <- FindClusters(merged, resolution =0.3)
+merged <- RunTSNE(merged, dims = dim.use,reduction = 'harmony')
+pdf(paste0("./",sam.name,"/tsne_Plot.harmony_res0.3_",max(dim.use),"PC.pdf"),width = 5,height = 4)
+DimPlot(object = merged, pt.size=0.1,label = T)
+dev.off()
+write.table(merged@meta.data,file = paste0("./",sam.name,"/",sam.name,"_cells_details_tsne_res0.3_",max(dim.use),"PC.txt"))
+all.markers <- FindAllMarkers(merged, only.pos = TRUE, 
+                              min.pct = 0.25, logfc.threshold = 0.25)
+write.table(all.markers,file=paste0("./",sam.name,"/",sam.name,"_marker_genes_tsne_res0.3_",max(dim.use),"PC.txt"),sep="\t",quote = F)
+merged$sample=factor(merged$sample,levels = c('HC','DLE','SLE'))
+b=table(merged$sample,merged$seurat_clusters)
+b=as.data.frame(b)
+write.table(b,file = 'sample.subcluster.txt',row.names = F,sep = '\t')
+p1=ggplot(b,mapping = aes(Var1,Freq,fill=Var2))+geom_bar(stat='identity',position='fill') +
+              labs(x = 'Sample',y = 'Frequency') +theme(axis.title =element_text(size = 16),axis.text =element_text(size = 14, color = 'black'),
+                                                        axis.text.x = element_text(angle = 45, hjust = 1))
+p2=p1+scale_fill_manual(values=cols)
+
+p3=p2 + theme_bw() + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank())
+p3
+ggsave(filename='sample.subcluster.fill.pdf',plot=p3,width=6,height=5)
+library(clusterProfiler)
+library(topGO)
+library(Rgraphviz)
+library(pathview)
+library(org.Hs.eg.db)
+library(DOSE)
+library(clusterProfiler)
+library(enrichplot)
+library(ReactomePA)
+library(data.table)
+table(merged$seurat_clusters)
+a=0:13
+for (i in a) {
+              gene=all.markers$cluster==i
+              gene=all.markers[gene,]
+              genename <- as.character(gene$gene)
+              genename=mapIds(x = org.Hs.eg.db,keys =genename,
+                              keytype = "SYMBOL",column = "ENTREZID")
+              enrich.go.BP=enrichGO(gene = genename,
+                                    OrgDb = org.Hs.eg.db,
+                                    keyType = 'ENTREZID',
+                                    ont = 'BP',
+                                    pvalueCutoff = 0.01,
+                                    qvalueCutoff = 0.05,readable = T)
+              enrich.KEGG=enrichKEGG(gene = genename,organism = "hsa",
+                                     keyType = "kegg",pvalueCutoff = 0.01,
+                                     use_internal_data = F,qvalueCutoff = 0.05)
+              
+              write.table(enrich.go.BP,file =paste0(i,'_FIB.go.txt') ,sep='\t')
+              write.table(enrich.KEGG,file =paste0(i,'_FIB.kegg.txt') ,sep='\t')
+}
+Idents(merged)=merged$sample
+all.markers.sample <- FindAllMarkers(merged, only.pos = TRUE, 
+                                     min.pct = 0.25, logfc.threshold = 0.25)
+write.table(all.markers.sample,file=paste0("./",sam.name,"/",sam.name,"_sample.marker_genes_tsne_res0.3_",max(dim.use),"PC.txt"),sep="\t",quote = F)
+table(Idents(merged))
+Idents(merged)=merged$seurat_clusters
+merged@misc$averageExpression=AverageExpression(merged)
+
+write.table(merged@misc$averageExpression$RNA,file = 'average.expression.subcluster.txt',sep = '\t',row.names = T,quote = F)
+saveRDS(merged, file = "./multi/subfib_tutorial_res0.3.rds")
+save(merged,file="./multi/subfib_res0.3.Robj")
+rm(list=ls())
+load('./multi/subfib_res0.3.Robj')
+table(Idents(merged))
+Idents(merged)=merged$seurat_clusters
+
+sub_fib<- subset(merged, idents=c('0','4','6','7','11','13'))
+rm(merged)
+markers <- FindAllMarkers(sub_fib, only.pos = TRUE, min.pct = 0.25, logfc.threshold = 0.25)
+
+markers.1=markers[markers$pct.1>0.5&markers$pct.2<0.5,]
+write.table(markers.1,file='marker.monocle.txt',sep='\t',row.names = F)
+save(sub_fib,file="./multi/sub_fib.Robj") 
+load('./multi/sub_fib.Robj')
+
+data <- as(as.matrix(sub_fib@assays$RNA@data), 'sparseMatrix')
+pd <- new('AnnotatedDataFrame', data = sub_fib@meta.data)
+fData <- data.frame(gene_short_name = row.names(data), row.names = row.names(data))
+fd <- new('AnnotatedDataFrame', data = fData)
+
+#Construct monocle cds
+cds <- newCellDataSet(data,
+                      phenoData = pd,
+                      featureData = fd,
+                      lowerDetectionLimit = 0.5,
+                      expressionFamily = negbinomial.size());
+cds <- estimateSizeFactors(cds)
+cds <- estimateDispersions(cds)
+ordering_genes <- row.names (subset(markers.1, p_val < 0.01))
+cds.1 <- setOrderingFilter(cds, ordering_genes)
+sam.name='multi'
+pdf('./multi/plot_ordering_genes_subfib3.pdf')
+plot_ordering_genes(cds.1)
+dev.off()
+HSMM <- reduceDimension(cds.1, max_components = 2,
+                        method = 'DDRTree')
+HSMM <- orderCells(HSMM)
+pdf('./multi/plot_cell_trajectory_seurat_clusters_subfib3.pdf')
+plot_cell_trajectory(HSMM, color_by = "seurat_clusters")
+dev.off()
+pdf('./multi/plot_cell_trajectory_state_subfib3.pdf')
+plot_cell_trajectory(HSMM, color_by = "State")
+dev.off()
+pdf('./multi/plot_cell_trajectory_pseudotime_subfib3.pdf')
+plot_cell_trajectory(HSMM, color_by = "Pseudotime")
+dev.off()

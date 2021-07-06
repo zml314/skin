@@ -1,0 +1,123 @@
+####subclustering analysis####
+library(Seurat)
+library(ggplot2)
+library(cowplot)
+library(Matrix)
+library(dplyr)
+library(ggsci)
+library(scater)
+library(SingleR)
+library(monocle)
+library(tibble)
+library(harmony)
+library(clusterProfiler)
+library(topGO)
+library(Rgraphviz)
+library(pathview)
+library(org.Hs.eg.db)
+library(DOSE)
+library(devtools)
+setwd('E:/R_analysis/epidermis.20200822/harmony.20201228/mac/')
+sam.name <- "multi"
+if(!dir.exists(sam.name)){
+              dir.create(sam.name)
+}
+load('../M_DC_merged.Rdata')
+merged=M_DC_merged
+rm(M_DC_merged)
+merged <- NormalizeData(merged, normalization.method = "LogNormalize",scale.factor = 10000)
+merged <- FindVariableFeatures(merged, selection.method = "vst", nfeatures = 2000)
+all.genes <- rownames(merged)
+merged <- ScaleData(merged, features = row.names(merged))
+merged <- ScaleData(merged, vars.to.regress = "percent.mt")
+merged <- RunPCA(merged, features = VariableFeatures(object = merged))
+pdf(paste0("./",sam.name,"/PCA-ElbowPlot.pdf"),width = 6,height = 5)
+ElbowPlot(merged,ndims = 40)
+dev.off()
+dim.use=1:20
+library(harmony)
+merged=RunHarmony(merged,group.by.vars ='orig.ident')
+merged<- FindNeighbors(merged, dims = dim.use,reduction = 'harmony')
+merged <- FindClusters(merged, resolution = 0.1)
+table(Idents(merged))
+Idents(merged)=merged$seurat_clusters
+merged <- RunTSNE(merged, dims = dim.use,check_duplicates = FALSE,reduction = 'harmony')
+pdf(paste0("./",sam.name,"/CellCluster-TSNEPlot_res0.3_",max(dim.use),"PC.pdf"),width = 6,height = 5)
+DimPlot(object = merged, pt.size=0.1,label = T,cols = cols)
+dev.off()
+merged<- CellCycleScoring(object = merged, g2m.features = cc.genes$g2m.genes, s.features = cc.genes$s.genes)
+all.markers <- FindAllMarkers(merged, only.pos = TRUE, 
+                              min.pct = 0.25, logfc.threshold = 0.25)
+write.table(all.markers,file=paste0("./",sam.name,"/",sam.name,"_marker_genes_tsne_res0.3_",max(dim.use),"PC.txt"),sep="\t",quote = F)
+pdf(file = 'macro.dc.marker.1.pdf',width = 15,height = 12)
+FeaturePlot(merged, features = c('LYZ','TCF4','FCGR3A','CD14','CD1C','IL1B','AIF1','ITGAE'),cols = c("gray", "purple"),min.cutoff = 0)
+dev.off()
+b=table(merged$sample,merged$seurat_clusters)
+b=as.data.frame(b)
+write.table(b,file = 'sample.subcluster.txt',row.names = F,sep = '\t')
+c=table(merged$orig.ident,merged$seurat_clusters)
+c=as.data.frame(c)
+write.table(c,file = 'orig.subcluster.txt',row.names = F,sep = '\t')
+p1=ggplot(b,mapping = aes(Var1,Freq,fill=Var2))+geom_bar(stat='identity',position='fill') +
+              labs(x = 'Sample',y = 'Frequency') +theme(axis.title =element_text(size = 16),axis.text =element_text(size = 14, color = 'black'),
+                                                        axis.text.x = element_text(angle = 45, hjust = 1))
+p2=p1+scale_fill_manual(values=cols)
+
+p3=p2 + theme_bw() + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank())
+p3
+ggsave(filename='sample.subcluster.fill.pdf',plot=p3,width=6,height=5)
+library(clusterProfiler)
+library(topGO)
+library(Rgraphviz)
+library(pathview)
+library(org.Hs.eg.db)
+library(DOSE)
+library(clusterProfiler)
+library(enrichplot)
+#BiocManager::install('ReactomePA')
+library(ReactomePA)
+library(data.table)
+table(merged$seurat_clusters)
+a=0:5
+for (i in a) {
+              gene=all.markers$cluster==i
+              gene=all.markers[gene,]
+              genename <- as.character(gene$gene)
+              genename=mapIds(x = org.Hs.eg.db,keys =genename,
+                              keytype = "SYMBOL",column = "ENTREZID")
+              enrich.go.BP=enrichGO(gene = genename,
+                                    OrgDb = org.Hs.eg.db,
+                                    keyType = 'ENTREZID',
+                                    ont = 'BP',
+                                    pvalueCutoff = 0.01,
+                                    qvalueCutoff = 0.05,readable = T)
+              enrich.KEGG=enrichKEGG(gene = genename,organism = "hsa",
+                                     keyType = "kegg",pvalueCutoff = 0.01,
+                                     use_internal_data = F,qvalueCutoff = 0.05)
+              
+              write.table(enrich.go.BP,file =paste0(i,'_M.go.txt') ,sep='\t')
+              write.table(enrich.KEGG,file =paste0(i,'_M.kegg.txt') ,sep='\t')
+}
+all.markers.sample <- FindAllMarkers(merged, only.pos = TRUE, 
+                                     min.pct = 0.25, logfc.threshold = 0.25)
+write.table(all.markers.sample,file=paste0("./",sam.name,"/",sam.name,"_sample.marker_genes_tsne_res0.3_",max(dim.use),"PC.txt"),sep="\t",quote = F)
+a=c('DLE','SLE')
+for (i in a) {
+              gene=all.markers.sample$cluster==i
+              gene=all.markers.sample[gene,]
+              genename <- as.character(gene$gene)
+              genename=mapIds(x = org.Hs.eg.db,keys =genename,
+                              keytype = "SYMBOL",column = "ENTREZID")
+              enrich.go.BP=enrichGO(gene = genename,
+                                    OrgDb = org.Hs.eg.db,
+                                    keyType = 'ENTREZID',
+                                    ont = 'BP',
+                                    pvalueCutoff = 0.01,
+                                    qvalueCutoff = 0.05,readable = T)
+              enrich.KEGG=enrichKEGG(gene = genename,organism = "hsa",
+                                     keyType = "kegg",pvalueCutoff = 0.01,
+                                     use_internal_data = F,qvalueCutoff = 0.05)
+              
+              write.table(enrich.go.BP,file =paste0(i,'_M.go.txt') ,sep='\t')
+              write.table(enrich.KEGG,file =paste0(i,'_M.kegg.txt') ,sep='\t')
+}

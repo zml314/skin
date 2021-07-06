@@ -1,0 +1,165 @@
+####epidermis####
+library(Seurat)
+library(ggplot2)
+library(cowplot)
+library(Matrix)
+library(dplyr)
+library(ggsci)
+library(scater)
+library(SingleR)
+library(monocle)
+library(tibble)
+library(harmony)
+library(clusterProfiler)
+library(topGO)
+library(Rgraphviz)
+library(pathview)
+library(org.Hs.eg.db)
+library(DOSE)
+setwd('E:/R_analysis/epidermis.20200822/harmony.20201228/')
+dle_1 <- Read10X(data.dir = "../sample.result/190529DLE.E/")
+dim(dle_1)
+rm(dle_1)
+DLE_1 <- CreateSeuratObject(counts =dle_1, project = "DLE_1", min.cells = 3, min.features = 200)
+dle_5 <- Read10X(data.dir = "../sample.result/200713DLE.E/")
+DLE_5 <- CreateSeuratObject(counts =dle_5, project = "DLE_5", min.cells = 3, min.features = 200)
+sle_6 <- Read10X(data.dir = "../sample.result/191107SLE.E/")
+SLE_6 <- CreateSeuratObject(counts =sle_6, project = "SLE_6", min.cells = 3, min.features = 200)
+sle_7 <- Read10X(data.dir = "../sample.result/200718SLE.E/")
+SLE_7 <- CreateSeuratObject(counts =sle_7, project = "SLE_7", min.cells = 3, min.features = 200)
+merged<-merge(DLE_1,c(DLE_5,SLE_6,SLE_7))
+sam.name <- "multi"
+if(!dir.exists(sam.name)){
+              dir.create(sam.name)
+}
+merged[["percent.mt"]] <- PercentageFeatureSet(merged, pattern = "^MT-")
+merged[["percent.ribo"]] <- PercentageFeatureSet(merged, pattern = "^RP[L|S]")#计算核糖体基因比例
+red.genes <- c("HBA1","HBA2","HBB")
+merged[["percent.redcell"]] <- PercentageFeatureSet(merged, features=red.genes[!is.na(match(red.genes,rownames(merged)))])
+
+pdf(paste0("./",sam.name,"feature.count.percent.mt.pdf"),width = 20,height = 12)
+VlnPlot(merged, features = c("nFeature_RNA", "nCount_RNA", "percent.mt","percent.ribo","percent.redcell"), ncol = 5,group.by = "orig.ident")
+dev.off()
+merged <- subset(merged, subset = nFeature_RNA > 200 & nFeature_RNA < 5000 & percent.mt < 20 & percent.redcell < 10) 
+merged <- NormalizeData(merged, normalization.method = "LogNormalize",scale.factor = 10000)
+merged <- FindVariableFeatures(merged, selection.method = "vst", nfeatures = 2000)
+top10 <- head(x = VariableFeatures(merged), 10)
+plot1 <- VariableFeaturePlot(merged)
+plot2 <- LabelPoints(plot = plot1, points = top10)
+pdf(file = paste0(sam.name,"/Norm-feature_variable_plot.pdf"),width = 8,height = 5)
+CombinePlots(plots = list(plot1, plot2),legend = "none")
+dev.off()
+all.genes <- rownames(merged)
+merged <- ScaleData(merged, features = rownames(merged))
+merged <- ScaleData(merged, vars.to.regress = "percent.mt")
+merged <- RunPCA(merged, features = VariableFeatures(object = merged))
+pdf(paste0("./",sam.name,"/PCA-ElbowPlot.pdf"),width = 6,height = 5)
+ElbowPlot(merged,ndims = 50)
+dev.off()
+dim.use <- 1:40
+library(harmony)
+merged=RunHarmony(merged,group.by.vars ='orig.ident' )
+pdf(paste0("./",sam.name,"/combined_DimPlot.harmony.pdf"),width = 5,height = 4)
+DimPlot(merged, reduction = "harmony",group.by = 'orig.ident')
+dev.off()
+merged<- FindNeighbors(merged, dims = dim.use,reduction = 'harmony')
+merged <- FindClusters(merged, resolution = 0.3)
+merged <- RunTSNE(merged, dims = dim.use,check_duplicates = FALSE,reduction = 'harmony')
+pdf(paste0("./",sam.name,"/CellCluster-TSNEPlot_res0.3_",max(dim.use),"PC.pdf"),width = 5,height = 4)
+DimPlot(object = merged, pt.size=0.1,label = T)
+dev.off()
+write.table(merged@meta.data,file = paste0("./",sam.name,"/",sam.name,"_cells_details_tsne_res0.3_",max(dim.use),"PC.txt"))
+pdf(paste0("./",sam.name,"/CellCluster-TSNEPlot.orig_res0.3_",max(dim.use),"PC.pdf"),width = 5,height = 4)
+DimPlot(object = merged, group.by="orig.ident", pt.size=0.1,reduction = "tsne")
+dev.off()
+a=table(merged@meta.data$seurat_clusters)
+write.table(a,file = 'res_0.3_cluster_cell_number.txt',sep = '\t')
+b=table(merged@meta.data$orig.ident,merged@meta.data$seurat_clusters)
+write.table(b,file = 'res_0.3_cluster_cell_number_orig.txt',sep = '\t')
+c=table(merged$sample,merged$seurat_clusters)
+write.table(b,file = 'res_0.3_cluster_cell_number_sample.txt',sep = '\t')
+merged<- CellCycleScoring(object = merged, g2m.features = cc.genes$g2m.genes, s.features = cc.genes$s.genes)
+pdf(paste0("./",sam.name,"/CellCluster-TSNEPlot_cellcycle_",max(dim.use),"PC.pdf"),width = 5,height = 4)
+DimPlot(merged,reduction = "tsne",label = TRUE,group.by="Phase",pt.size = 0.1)
+dev.off()
+Idents(merged)=merged$seurat_clusters
+all.markers <- FindAllMarkers(merged, only.pos = TRUE, 
+                              min.pct = 0.25, logfc.threshold = 0.25)
+write.table(all.markers,file=paste0("./",sam.name,"/",sam.name,"_marker_genes_tsne_res0.3_",max(dim.use),"PC.txt"),sep="\t",quote = F)
+marker.sig <- all.markers %>% filter(p_val_adj <= 0.05)
+top10 <- marker.sig %>% group_by(cluster) %>% top_n(n = 10, wt = avg_logFC)
+write.table(top10,file=paste0("./",sam.name,"/",sam.name,"_top10_marker_genes_tsne_",max(dim.use),"PC.txt"),sep="\t",quote = F)
+merged=subset(merged,seurat_clusters!=15)
+modify_vlnplot<- function(obj,
+                          feature,
+                          pt.size = 0,
+                          plot.margin = unit(c(-0.75, 0, -0.75, 0), "cm"),
+                          ...) {
+              p<- VlnPlot(obj, features = feature, pt.size = pt.size, ... )  +
+                            xlab("") + ylab(feature) + ggtitle("") +
+                            theme(legend.position = "none",
+                                  axis.text.x = element_blank(),
+                                  axis.text.y = element_blank(),
+                                  axis.ticks.x = element_blank(),
+                                  axis.ticks.y = element_line(),
+                                  axis.title.y = element_text(size = rel(1), angle = 0, vjust = 0.5),
+                                  plot.margin = plot.margin )
+              return(p)
+}
+StackedVlnPlot<- function(obj, features,
+                          pt.size = 0,
+                          plot.margin = unit(c(-0.75, 0, -0.75, 0), "cm"),
+                          ...) {
+              
+              plot_list<- purrr::map(features, function(x) modify_vlnplot(obj = obj,feature = x, ...))
+              plot_list[[length(plot_list)]]<- plot_list[[length(plot_list)]] +
+                            theme(axis.text.x=element_text(), axis.ticks.x = element_line())
+              
+              p<- patchwork::wrap_plots(plotlist = plot_list, ncol = 1)
+              return(p)
+}
+table(Idents(merged))
+P1=StackedVlnPlot(merged, c('IFIT1','RSAD2'), pt.size=0, cols=cols)
+P1
+P1=StackedVlnPlot(merged, c('KRT6A','KRT1','KRT5','FLG','CD3D','CD3G', 'LYZ','AIF1', 'NKG7','XCL2', 'CD79A','MS4A1','PMEL','MLANA'), pt.size=0, cols=cols)
+P1
+ggsave(filename = 'stackedVlnplot.epidermis.res0.3.pdf',plot = P1,width =10,height = 10)
+table(merged$seurat_clusters)
+merged <- RenameIdents(
+              object = merged,
+              "0" = "T",
+              "1" = "Keratinocytes",
+              "2" = "Macrophage/DC",
+              "3" = "T",
+              "4" = "Keratinocytes",
+              "5" = "Keratinocytes",
+              "6" = "Keratinocytes",
+              "7" = "NK",
+              "8" = "B",
+              "9" = "Keratinocytes",
+              "10" = "Melanocytes",
+              "11" = "NKT",
+              "12"= "Keratinocytes",
+              "13"= "Macrophage/DC",
+              "14"="Keratinocytes"
+)
+library(forcats)
+Idents(merged)=fct_infreq(Idents(merged))
+merged$cell_type=Idents(merged)
+a=table(Idents(merged),merged$orig.ident)
+write.table(a,file = 'idents.orig,txt',sep = '\t')
+a=as.data.frame(a)
+p1=ggplot(a,mapping = aes(Var2,Freq,fill=Var1))+geom_bar(stat='identity',position='fill') +labs(x = 'Sample',y = 'Frequnency') +theme(axis.title =element_text(size = 16),axis.text =element_text(size = 14, color = 'black'))+theme(axis.text.x = element_text(angle = 45, hjust = 1))
+p2=p1+scale_fill_manual(values = cols)+theme(legend.position = 'bottom')
+p2
+ggsave(filename = 'idents.orig.pdf',plot = p2,height = 8,width = 10)
+T_merged=subset(merged,cell_type%in%c('T','NKT'))
+save(T_merged,file ='T_merged.Rdata')
+B_merged=subset(merged,cell_type=='B')
+save(B_merged,file =' B_merged.Rdata')
+M_DC_merged=subset(merged,cell_type=='Macrophage/DC')
+save(M_DC_merged,file = "M_DC_merged.Rdata")
+NK_merged=subset(merged,cell_type=='NK')
+save(NK_merged,file = "NK_merged.Rdata")
+kera_merged=subset(merged,cell_type=='Keratinocytes')
+save(kera_merged,file = "kera_merged.Rdata")
